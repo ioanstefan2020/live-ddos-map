@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 import httpx
 
 # Cloudflare Radar API config
-CF_API_BASE = "https://api.cloudflare.com/client/v1/radar"
+CF_API_BASE = "https://api.cloudflare.com/client/v3/radar"
 CF_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN")
 HEADERS = {"Authorization": f"Bearer {CF_TOKEN}"} if CF_TOKEN else {}
 
