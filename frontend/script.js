@@ -1,152 +1,54 @@
-// script.js — lightweight front-end that:
-// 1) fetches /config for Mapbox token
-// 2) initializes the map
-// 3) pulls /events and draws lines (arcs) + points
-//
-// Requirements in your index.html:
-// - Mapbox GL JS CSS + JS loaded
-// - <div id="map"></div>
-// - <div id="legend" class="panel"></div><div id="status" class="panel"></div>
+// Initialize Leaflet map
+const map = L.map('map').setView([20, 0], 2); // world view
 
-const CONFIG_URL = "/config";
-const EVENTS_URL = "/events";
-let map;
-let centroidsByCCA2 = {}; // e.g. { "US": [lng,lat], ... }
-let refreshTimer;
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors'
+}).addTo(map);
 
-async function fetchConfig() {
-  const res = await fetch(CONFIG_URL);
-  if (!res.ok) throw new Error("Failed to load /config");
-  return res.json();
-}
+// Function to fetch events and draw arcs
+async function updateMap() {
+  const response = await fetch("http://127.0.0.1:8000/events");
+  const data = await response.json();
+  
+  // Clear existing layers
+  map.eachLayer(layer => {
+    if (layer instanceof L.Polyline) map.removeLayer(layer);
+  });
 
-// Pull country coords (uses REST Countries; provides cca2 + latlng)
-async function loadCountryCentroids() {
-  const res = await fetch("https://restcountries.com/v3.1/all");
-  if (!res.ok) throw new Error("Failed to load country coordinates");
-  const all = await res.json();
-  for (const c of all) {
-    const code = c.cca2;
-    const latlng = c.latlng; // [lat, lng]
-    if (code && Array.isArray(latlng) && latlng.length === 2) {
-      const lngLat = [latlng[1], latlng[0]]; // convert to [lng, lat]
-      centroidsByCCA2[code.toUpperCase()] = lngLat;
+  data.arcs.forEach(arc => {
+    // Use Leaflet to draw line between origin and target
+    const origin = countryToLatLng(arc.origin);
+    const target = countryToLatLng(arc.target);
+
+    if (origin && target) {
+      L.polyline([origin, target], {
+        color: 'red',
+        weight: Math.min(arc.value / 50, 5) // weight based on value
+      }).addTo(map);
     }
-  }
-}
-
-function makeLineFeature(originLngLat, targetLngLat, weight = 1) {
-  return {
-    type: "Feature",
-    geometry: { type: "LineString", coordinates: [originLngLat, targetLngLat] },
-    properties: { weight }
-  };
-}
-
-function makePointFeature(lngLat, value = 1) {
-  return {
-    type: "Feature",
-    geometry: { type: "Point", coordinates: lngLat },
-    properties: { value }
-  };
-}
-
-async function drawEvents() {
-  const status = document.getElementById("status");
-  status.textContent = "Loading events…";
-  const res = await fetch(`${EVENTS_URL}?dateRange=1h`);
-  if (!res.ok) {
-    status.textContent = "Failed to load /events";
-    return;
-  }
-  const data = await res.json();
-  const arcs = data.arcs || [];
-
-  const lineFeatures = [];
-  const pointFeatures = [];
-
-  for (const arc of arcs) {
-    const o = centroidsByCCA2[arc.origin];
-    const t = centroidsByCCA2[arc.target];
-    if (!o || !t) continue;
-
-    lineFeatures.push(makeLineFeature(o, t, arc.value));
-    pointFeatures.push(makePointFeature(t, arc.value));
-  }
-
-  const lines = { type: "FeatureCollection", features: lineFeatures };
-  const points = { type: "FeatureCollection", features: pointFeatures };
-
-  // Update or add sources
-  if (map.getSource("attack-lines")) {
-    map.getSource("attack-lines").setData(lines);
-  } else {
-    map.addSource("attack-lines", { type: "geojson", data: lines });
-    map.addLayer({
-      id: "attack-lines",
-      type: "line",
-      source: "attack-lines",
-      paint: {
-        "line-width": [
-          "interpolate", ["linear"], ["get", "weight"],
-          0, 0.5,
-          10, 3
-        ],
-        "line-opacity": 0.75
-      }
-    });
-  }
-
-  if (map.getSource("attack-points")) {
-    map.getSource("attack-points").setData(points);
-  } else {
-    map.addSource("attack-points", { type: "geojson", data: points });
-    map.addLayer({
-      id: "attack-points",
-      type: "circle",
-      source: "attack-points",
-      paint: {
-        "circle-radius": [
-          "interpolate", ["linear"], ["get", "value"],
-          0, 2,
-          10, 10
-        ],
-        "circle-opacity": 0.8
-      }
-    });
-  }
-
-  const total = arcs.length;
-  status.textContent = `Showing ${total} attack flows (Layer 7, last 1h). Auto-refreshing…`;
-}
-
-async function main() {
-  const config = await fetchConfig();
-  if (!config.mapboxToken) {
-    alert("Missing MAPBOX_TOKEN on server (/config)");
-    return;
-  }
-  mapboxgl.accessToken = config.mapboxToken;
-
-  await loadCountryCentroids();
-
-  map = new mapboxgl.Map({
-    container: "map",
-    style: "mapbox://styles/mapbox/dark-v11",
-    center: [0, 20],
-    zoom: 1.2
-  });
-
-  map.addControl(new mapboxgl.NavigationControl());
-
-  map.on("load", async () => {
-    document.getElementById("legend").innerHTML =
-      `<span class="badge">L7</span> Live DDoS flows (Cloudflare Radar)`;
-
-    await drawEvents();
-    // refresh every 30s
-    refreshTimer = setInterval(drawEvents, 30000);
   });
 }
 
-window.addEventListener("DOMContentLoaded", main);
+// Minimal country code → lat/lng mapping
+const countryCoords = {
+  "US": [37.0902, -95.7129],
+  "RU": [61.5240, 105.3188],
+  "CN": [35.8617, 104.1954],
+  "DE": [51.1657, 10.4515],
+  "FR": [46.2276, 2.2137],
+  "BR": [-14.2350, -51.9253],
+  "IN": [20.5937, 78.9629],
+  "JP": [36.2048, 138.2529],
+  "GB": [55.3781, -3.4360],
+  "CA": [56.1304, -106.3468],
+  "AU": [-25.2744, 133.7751],
+  "KR": [35.9078, 127.7669],
+  "IT": [41.8719, 12.5674],
+  // Add more as needed
+};
+function countryToLatLng(code) {
+  return countryCoords[code];
+}
+// Update every 60 seconds
+updateMap();
+setInterval(updateMap, 60000);
