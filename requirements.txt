@@ -1,0 +1,5 @@
+fastapi==0.114.0
+httpx==0.26.1
+apscheduler==3.10.1
+uvicorn==0.26.1
+python-dotenv==1.0.0
